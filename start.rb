@@ -20,7 +20,8 @@ ensure
 end
 
 # Setup connection-variables
-ip = Socket.ip_address_list[1].ip_address
+#ip = Socket.ip_address_list[1].ip_address
+ip = "0.0.0.0"
 port = 8001
 
 # Setup user-variables

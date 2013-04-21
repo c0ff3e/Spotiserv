@@ -16,7 +16,8 @@ class SpotiThin
 
     # Registrates the resources for the web-server
     Thin::Server.start(ip, port) do
-      use Rack::CommonLogger
+	logger = Logger.new('tmp/app.log')
+      use Rack::CommonLogger,logger
       
       # /add, to add a song to the playlist: /add/<user-code>/<spotify-uri>
       map "/add" do
@@ -38,14 +39,34 @@ class SpotiThin
         run Queue_song.new sp.playlist
       end
 
+      # /status.xml, the ajax request from the browser
+      map "/status.xml" do
+        run Status.new sp
+      end
+
       # /next, skips the current song and starts the next instead
       map "/next" do
         run Next_song.new sp
       end
-      
+
+      # /pp, Pause or plays a toggle
+      map "/pp" do
+        run Play_Pause.new sp
+      end 
+
+      # /resume, Pause or plays a toggle
+      map "/resume" do
+        run Resume.new sp
+      end      
+
       # / and /index.html, page with js that loads the xml-file every 3rd second.
       map "/" do
         run Index.new
+      end
+
+      # /controllerpage with js that loads the xml-file every 3rd second.
+      map "/controller" do
+        run Controll.new
       end
       
     end
@@ -67,6 +88,7 @@ class SpotiThin
       puts "User: " + user
       puts "Track: " + track_uri
       track = Hallon::Track.new(track_uri).load
+      @sp.playlistSpotifyUrl.push({:track=>track_uri})
       @sp.add_to_playlist ({:track => track, :user => user})
       xml = {:command=>"add", :track=>track.name, :artist=>track.artist.name,
         :album=>track.album.name, :user=>user}.to_xml
@@ -82,6 +104,30 @@ class SpotiThin
     def call(env)
       @sp.p_next
       xml = {:command=>"next"}.to_xml
+      [200, {'Content-Type'=>'text/xml'}, [xml]]
+    end
+  end
+
+  class Play_Pause
+    def initialize (sp)
+      @sp = sp
+    end
+
+    def call(env)
+      @sp.play_pause
+      xml = {:command=>"play_pause"}.to_xml
+      [200, {'Content-Type'=>'text/xml'}, [xml]]
+    end
+  end
+
+  class Resume
+    def initialize (sp)
+      @sp = sp
+    end
+
+    def call(env)
+      @sp.p_resume
+      xml = {:command=>"resume"}.to_xml
       [200, {'Content-Type'=>'text/xml'}, [xml]]
     end
   end
@@ -102,7 +148,10 @@ class SpotiThin
       puts "Album: " + album_uri
       albumBrowse = Hallon::Album.new(album_uri).browse.load
       for track in albumBrowse.tracks
+      binding.pry
+      @sp.playlistSpotifyUrl.push({:track=>track})	
         @sp.add_to_playlist ({:track => track, :user => user})
+	sleep(1)
       end
       xml = {:command=>"add_album", :track=>track.name, :artist=>track.artist.name,
         :album=>track.album.name, :user=>user}.to_xml
@@ -141,6 +190,132 @@ class SpotiThin
       [200, {"Content-Type"=>"text/xml"}, [xml]]
     end
   end
+
+  class Status
+    def initialize (sp)
+      @sp = sp
+    end
+
+    def call(env)
+			xmlArray = []
+			xmlArray.push({:command=>"Status", :Paused=>@sp.paused.to_s, :Playing=>@sp.playing.to_s})
+			xml = xmlArray.to_xml(:root => "item")
+      [200, {"Content-Type"=>"text/xml"}, [xml]]
+    end
+  end
+
+	class Controll
+    def call(env)
+      js = %?
+<script>
+function loadQueues2() {
+	var xmlhttp;
+	var x,xx,txt,paused,play;
+	if (window.XMLHttpRequest) {// code for IE7+, Firefox, Chrome, Opera, Safari
+		xmlhttp=new XMLHttpRequest();
+	} else {// code for IE6, IE5
+		xmlhttp=new ActiveXObject("Microsoft.XMLHTTP");
+	}
+	xmlhttp.onreadystatechange=function() {
+		if (xmlhttp.readyState==4 && xmlhttp.status==200) {
+			x=xmlhttp.responseXML.documentElement.getElementsByTagName("item");
+			for (i=0;i<x.length;i++) {
+			xx=x[i].getElementsByTagName("Playing"); {
+				play=xx[0].firstChild.nodeValue;
+			}
+			xx=x[i].getElementsByTagName("Paused"); {
+				paused=xx[0].firstChild.nodeValue;
+			}
+			}
+			}
+			if (play == "true") {
+				txt='<img onclick="switcha()" src="http://79.102.148.111:8002/pause.png" hight="72" width="72">';
+			} else {
+				txt='<img onclick="switcha()" src="http://79.102.148.111:8002/play.png" hight="72" width="72">';			
+			}
+			document.getElementById("queueInfo2").innerHTML=txt;
+	}
+	xmlhttp.open("GET","status.xml",true);
+	xmlhttp.send();
+}
+
+function switcha() {
+	var xmlhttp2;
+	if (window.XMLHttpRequest) {// code for IE7+, Firefox, Chrome, Opera, Safari
+		xmlhttp2=new XMLHttpRequest();
+	} else {// code for IE6, IE5
+		xmlhttp2=new ActiveXObject("Microsoft.XMLHTTP");
+	}
+	xmlhttp2.onreadystatechange=function() {
+	}
+	xmlhttp2.open("GET","pp",true);
+	xmlhttp2.send();
+}
+
+function nexta() {
+	var xmlhttp2;
+	if (window.XMLHttpRequest) {// code for IE7+, Firefox, Chrome, Opera, Safari
+		xmlhttp3=new XMLHttpRequest();
+	} else {// code for IE6, IE5
+		xmlhttp3=new ActiveXObject("Microsoft.XMLHTTP");
+	}
+	xmlhttp3.onreadystatechange=function() {
+	}
+	xmlhttp3.open("GET","next",true);
+	xmlhttp3.send();
+}
+
+function looper() {
+	setInterval(function(){loadQueues2()},3000);
+}
+
+window.onload = looper;
+
+</script>
+    ?
+
+      head = %%
+    <title>SpotiServ, Controller</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+
+    <link href='http://fonts.googleapis.com/css?family=Merriweather+Sans:400,700,800' rel='stylesheet' type='text/css'>
+%
+
+      css = """
+    <style>
+      body {background-color:white; font-family: 'Merriweather Sans', sans-serif; font-weight: 700; font-size:175%;}
+      h1 {font-family: 'Merriweather Sans', sans-serif; font-weight: 800; font-size:300%;}
+      table {border-collapse:collapse;width:100%}
+      th, td {border: 2px solid #98bf21; padding:3px 7px 2px 7px;}
+      th {text-align:center; padding-top:5px; padding-bottom:4px; background-color:#A7C942; color:#ffffff;}
+      tr.alt td{color:#000000; background-color:#EAF2D3;}
+
+      #queueInfo {margin:40px;}
+    </style>
+"""
+
+      html = %%<!DOCTYPE html>
+<html>
+  <head>
+    #{head}
+    #{css}
+    #{js}
+  </head>
+  <body>
+  <center>
+    <div id="queueInfo2">
+    </div>
+    <div id="next"> <img onclick="nexta()" src="http://79.102.148.111:8002/next.png" hight="72" width="72">
+    </div>
+  </center>
+  </body>
+</html>
+%
+      
+      [200, {"Content-Type"=>"text/html"}, [html]]
+    end
+  end
+
 
 
   class Index
@@ -251,6 +426,8 @@ class SpotiThin
   <center>
     <div id="head"><h1>SpotiServ, PlayQueue</h1></div>
     <div id="queueInfo">
+    </div>
+    <div id="queueInfo2">
     </div>
   </center>
     
